@@ -56,8 +56,9 @@ var app = (function () {
         },
 
         publishPoint: function(event){
-            var px = event.clientX;
-            var py = event.clientY;
+            var pos = getMousePosition(event);
+            var px = pos.x;
+            var py = pos.y;
             var pt=new Point(px,py);
             console.info("publishing point at "+pt);
             addPointToCanvas(pt);
