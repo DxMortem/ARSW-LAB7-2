@@ -22,12 +22,14 @@ var app = (function () {
         var canvas = document.getElementById("canvas");
         var ctx = canvas.getContext("2d");
         ctx.beginPath();
-        ctx.moveTo(points[0].x,points[1].y);
+        ctx.moveTo(points[0].x,points[0].y);
         for(var i=1; i<points.length; i++){
             ctx.lineTo(points[i].x,points[i].y);
+            console.log(points[i]);
         }
         ctx.closePath();
         ctx.fill();
+        ctx.stroke();
     }
     
     
@@ -54,9 +56,7 @@ var app = (function () {
             var punto=JSON.parse(eventbody.body);
             addPointToCanvas(punto);
             });
-        });
-        stompClient.connect({}, function (frame) {
-            console.log('Connected: ' + frame);
+            
             stompClient.subscribe('/topic/newpolygon.' + board , function (eventbody) {
             var points = JSON.parse(eventbody.body);
             addPolygonToCanvas(points);

@@ -24,7 +24,7 @@ public class STOMPMessagesHandler {
     @MessageMapping("/newpoint.{numdibujo}")
     public void handlePointEvent(Point pt,@DestinationVariable String numdibujo) throws Exception {
         System.out.println("Nuevo punto recibido en el servidor!:"+pt);
-        if (poligons.contains(numdibujo)){
+        if (poligons.containsKey(numdibujo)){
             poligons.get(numdibujo).add(pt);
             if(poligons.get(numdibujo).size()>3){
                 msgt.convertAndSend("/topic/newpolygon."+numdibujo, poligons.get(numdibujo));
