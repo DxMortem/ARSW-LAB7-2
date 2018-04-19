@@ -34,7 +34,7 @@ import org.springframework.web.socket.config.annotation.StompEndpointRegistry;
 @EnableWebSocketMessageBroker
 public class CollabPaintWebSocketConfig extends AbstractWebSocketMessageBrokerConfigurer {
 
-    @Value("${server.messaging.host}")
+    @Value("${server.messaging.address}")
     private String host;
 
     @Value("${server.messaging.port}")
