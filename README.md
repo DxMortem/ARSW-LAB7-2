@@ -1,195 +1,151 @@
 ### Escuela Colombiana de Ingeniería
-### Arquitecturas de Software
+### Arquitecturas de Software - ARSW
+## Ejercicio - Cachés y Bases de datos NoSQL
 
-#### Escalamiento con balanceo de carga 
-#### Brokers de Mensajería y Balanceadores de carga
+En este ejercicio se va a ajustar la aplicación de dibujo colaborativo, y se le va a agregar un caché para llevar de forma centralizada -y con un acceso rápido- el estado de los dibujos de cada una de las salas.
 
-En este ejercicio va a crear un esquema de balanceo de carga a través de una red de máquinas virtuales (guest), las cuales sólo serán visibles desde la máquina 'host'.
 
-# Parte 0 - Entorno virtual
+## Parte I
 
-1. Importe la máquina virtual suministrada (extensión .ova).
-2. Antes de iniciar la máquina virtual, configure las redes de VirtualBox (File/Preferences/Network). Si no está configurada, agregue una red NAT (NatNework) y otra red Host-only Network (vboxnet0)
+1. Inicie la máquina virtual Ubuntu trabajada anteriormente, e instale el servidor REDIS [siguiendo estas instrucciones](https://www.digitalocean.com/community/tutorials/how-to-install-and-use-redis), sólo hasta 'sudo make install'. Con esto, puede iniciar el servidor con 'redis-server'. Nota: para poder hacer 'copy/paste' en la terminal (la de virtualbox no lo permite), haga una conexión ssh desde la máquina real hacia la virtual.
 
-![](img/Selection_007.png)
-![](img/Selection_008.png)
+2. Agregue las dependencias requeridas para usar Jedis, un cliente Java para REDIS:
 
-3. Configure la máquina virtual (Settings/Network) y configure dos adaptadores de red. El primero de tipo 'Host-only' (asociado a la red vboxnet0), y el segundo de tipo NAT-Network (asociado a la red (NatNetwork).
+	```xml
+		<dependency>
+            <groupId>redis.clients</groupId>
+            <artifactId>jedis</artifactId>
+            <version>2.9.0</version>
+        </dependency>
 
-![](img/Selection_011.png)
-![](img/Selection_012.png)
+        <dependency>
+            <groupId>org.apache.logging.log4j</groupId>
+            <artifactId>log4j-core</artifactId>
+            <version>2.8.2</version>
+        </dependency>
 
-3. Inicie la máquina virtual y autentíquese con   ubuntu / reverse .
+        <dependency>
+            <groupId>org.slf4j</groupId>
+            <artifactId>slf4j-api</artifactId>
+            <version>1.7.25</version>
+        </dependency>   
+ 	```                               
+       
 
-4. Configure la máquina virtual para que active el segundo adaptador de red. Para eso, en la máquina virtual edite el archivo /etc/network/interfaces y agregue:
+3. Copie la siguiente clase y archivo de configuración (en las rutas respectivas) dentro de su proyecto (éstas ya tiene la configuración para manejar un pool de conexiones al REDIS):
 
-	```text
-	auto eth1
-	iface eth1 inet dhcp
-	```
+	* [https://github.com/hcadavid/jedis-examples/blob/master/src/main/java/util/JedisUtil.java](https://github.com/hcadavid/jedis-examples/blob/master/src/main/java/util/JedisUtil.java)
+	* [https://github.com/hcadavid/jedis-examples/blob/master/src/main/resources/jedis.properties](https://github.com/hcadavid/jedis-examples/blob/master/src/main/resources/jedis.properties)
+   
+
+
+## Parte II
+
+
+
+En la versión actual de la aplicación, en el método dentro del servidor que recibe los eventos, se tiene una lógica que considera -dentro de un bloque sincronizado-:
+
+1. Recibir el nuevo punto.
+2. Agregar el punto a una colección de puntos.
+3. Publicar el punto en el tópico correspondiente.
+4. Si la colección tiene cuatro puntos:
+	* Armar un polígono.
+	* Publicar el polígono.
+	* Reiniciar la colección.
+
+El esquema anterior sin emabargo, SÓLO sirve cuando se tiene un único servidor. Cuando se tienen N bajo un esquema de balanceo de carga, evidentemente se pueden tener condiciones de carrera.
+
+Para corregir esto, va a hacero uso de la base de datos Llave-valor REDIS, y su cliente correspondiente para Java Jedis:
+
+
+```java
+
+Jedis jedis = JedisUtil.getPool().getResource();
+	    
+	//Operaciones	    
+	    
+jedis.close();
+	    
+```
+
+
+1. En lugar de tener una lista de puntos en la memoria del servidor, se tendrán dos llaves asociadas a listas de enteros en REDIS: una para los valores en X y otra para los valores en Y.
+
+2. El servidor, al recibir un nuevo punto:
+	* Inicia [una transacción REDIS](https://github.com/xetorthio/jedis/wiki/AdvancedUsage), haciendo 'watch' sobre las dos listas anteriores.
+	* Hace RPUSH a las dos listas, con los datos X y Y correspondientes ([ver API de Jedis](http://tool.oschina.net/uploads/apidocs/jedis-2.1.0/redis/clients/jedis/Jedis.html)).
+	* Ejecuta la transacción (si tx es el objeto Transaction):
 	
-3. Reinicie la máquina y verifique que la máquina tenga salida a Internet. Para esto, haga PING a un servidor desde la máquina virtual.
+		```java
+		List<Object> res=tx.exec();
+		```	
+	* Verifica si la transacción fue exitosa:la lista 'res' debería no ser vacía.
+	* Si fue exitosa, publica el punto en el tópico correspondiente.
+	* De lo contrario, reintentar la operación (puede hacer todo lo anterior dentro de un ciclo).
+	* Cierra 
 
-4. Verifique que la máquina virtual sea accesible desde la máquina real. Revise la dirección IP (la que empieza con 192.168.56.) de la máquina virtual (comando ifconfig), e intente hacer ping desde la máquina real a dicha dirección. 
+3. Una vez se haya agregado el punto en REDIS, se debe hacer una operación que, de manera atómica (esta vez sin transacción), consulte si hay 4 puntos en las listas, y que en caso afirmativo, devuelva dichos puntos y posteriormente los elimine.
 
-5. Apague la máquina virtual (sudo shutdown -P 0), y ahora cree un clon de la misma (clic-derecho sobre la máquina virtual  / Clone). No olvide elegir la opción de reiniciar la dirección MAC de los adaptadores de red, y haga un clonado de tipo 'Linked Clone'. Una vez clonado, rectifique que los adaptadores de red de la nueva máquina virtual tiene direcciones MAC diferentes a la máquina original.
+	Para lo anterior, cree un [script en lenguaje LUA](https://www.redisgreen.net/blog/intro-to-lua-for-redis-programmers/), que:
+	1. Invoque la operación LRANGE para consultar el tamaño de una de las listas.
+	2.  En caso de que el mismo sea cuatro, guarde los cuatro elementos en una variable y borre la llave en REDIS. 
+	3. Al final, el programa retorna una lista vacía si la lista de puntos NO tenía cuatro puntos, o la lista con dichos elementos en caso contrario. 
+	
+	El siguiente es el script correspondiente (ajuste los nombres de las llaves a su conveniencia), el cual puede ejecuatarse a través del método 'eval' de la Transacción tanto de REDIS como de Jedis. Este ejemplo asume que se tienen dos listas, una para los Xs y otra para los Ys. Al final, se retorna un  arreglo de arreglos (una lista con las dos listas de valores en X y en Y).
 
-7. Inicie ambas máquinas y verifique que queden con sus respectivas direcciones, y que éstas sean accesibles. Una vez verificado esto, puede conectarse a las máquinas virtuales a través de ssh (para no tener que usar la terminal de la máquina virtual):
-
-	```text
-	ssh ubuntu@192.168.56.XX
+	```lua
+	local xval,yval; 
+	if (redis.call('LLEN','dalist1')==4) then 
+		xval=redis.call('LRANGE','dalist1',0,-1); 			
+		yval=redis.call('LRANGE','dalist2',0,-1);
+		redis.call('DEL','dalist1'); 
+		redis.call('DEL','dalist2'); 		
+		return {xval,yval}; 
+	else 
+		return {}; 
+	end
 	```
 
-# Parte 1
-
-1. En uno de los dos servidores virtuales, inicie el servidor ActiveMQ. Para esto, ubíquese en el directorio apache-activemq-5.14.1/bin (en el directorio raíz del usuario 'ubuntu'), y ejecute ./activemq start .
-2. Para verificar que el servidor de mensajes esté arriba, abra la consola de administración de ActiveMQ: http://IP_SERVIDOR:8161/admin/ (usuario/contraseña: admin/admin) . Consulte qué tópicos han sido creados en el momento.
-
-3. Recupere la última versión del ejericio realizado de WebSockets (creación colaborativa de polígonos). Modifíquelo para que en lugar de usar el 'simpleBroker' (un broker de mensajes embebido en la aplicación), delegue el manejo de los eventos a un servidor de mensajería dedicado (en este caso, ActiveMQ).
-
-	Es decir, en la configuración en lugar de:
+	Para ejecutar este script dentro de una transacción en Jedis, tenga en cuenta usar la operación tx.eval() que hace uso de los bytes, en lugar de la que recibe una cadena. Con esto al momento de hacer el 'exec' de la transacción (no antes!), a la variable 'luares' se le asignará lo returnado por la evaluación del script Lua. En caso de que dicho Script retorne '{}' (arreglo vacío), en Jedis se recibirá un objeto de tipo ArrayList, con cero elementos. En caso de que sí reciba la respuesta, recibirá un ArrayList con dos ArrayList (en este caso, un ArrayList con DOS ArrayList, cada uno de estos con los cuatro puntos). Tenga en cuenta que en este caso cada punto vendrá como un byte[], y se deberá reconstruir en String:
 	
 	```java
-	config.enableSimpleBroker("/topic");
-	```
+	String luaScript = "..."
+
+	//operaciones con la transacción...
 	
-	Se configurará como:
+	Response<Object> luares= tx.eval(luaScript.getBytes(), 0, "0".getBytes());
 
-	```java
-	config.enableStompBrokerRelay("/topic/").setRelayHost("127.0.0.1").setRelayPort(61613);
-	```
-
-	Teniendo en cuenta que el parámetro 'relayHost' deberá tener la IP del host donde esté funcionando el servidor de mensajería.
-	
-
-4. Modifique, también en la configuración, el registro del 'endpoint', para que permita mensajes de otros servidores (por defecto sólo acepta de sí mismo). Eso es requerido para permitir el manejo del balanceador de carga:
-
-	```nginx
-	@Override
-    	public void registerStompEndpoints(StompEndpointRegistry registry) {
-        	registry.addEndpoint("/stompendpoint").setAllowedOrigins("*").withSockJS();        
-	}
-	```
-
-<!--5. Modifique el manejador de los eventos interceptados por la aplicación (los que empiezan con /app), para que muestre por consola un mensaje cada vez que se recibe un evento.-->
-
-6. Agregue las siguientes dependencias al proyecto:
+	//operaciones con la transacción...
+		
+	List<Object> res=tx.exec();
+		
+	//imprimirel valor (convertido a cadena) del primer número de la primera lista dada como respuesta,
+	//si el resultado es un arreglo con dos elementos:
+	if (((ArrayList)luares.get()).size()==2){
+            System.out.println(new String((byte[])((ArrayList)(((ArrayList)luares.get()).get(0))).get(0)));
+	}	
 
 	```
-        <dependency>
-            <groupId>org.springframework.integration</groupId>
-            <artifactId>spring-integration-amqp</artifactId>            
-        </dependency>
-        <dependency>
-            <groupId>io.projectreactor</groupId>
-            <artifactId>reactor-core</artifactId>
-            <version>2.0.8.RELEASE</version>
-        </dependency>    
-
-        <dependency>
-            <groupId>io.projectreactor</groupId>
-            <artifactId>reactor-net</artifactId>
-            <version>2.0.8.RELEASE</version>
-        </dependency>    
-        <dependency>
-            <groupId>io.netty</groupId>
-            <artifactId>netty-transport</artifactId>
-            <version>4.0.42.Final</version>
-        </dependency>                                
-        <dependency>
-            <groupId>io.netty</groupId>
-            <artifactId>netty-transport-native-epoll</artifactId>
-            <version>4.0.42.Final</version>
-        </dependency>                                
-
-        <dependency>
-            <groupId>io.netty</groupId>
-            <artifactId>netty-handler</artifactId>
-            <version>4.0.42.Final</version>
-        </dependency>
-	```
-
-6. Copie la aplicación a los dos servidores virtuales (puede usar ssh, o publicarla en un repositorio GIT y luego clonarla desde cada máquina).
-
-7. En cada máquina ejecute la aplicación, y desde el navegador (en la máquina real) verifique que las dos aplicaciones funcionen correctamente (usando las respectivas direcciones IP).
-
-8. Al haber usado la aplicación, consulte nuevamente la consola Web de ActiveMQ, y revise qué información de tópicos se ha mostrado.
 
 
-# Parte 2
-
-Escoja uno de sus dos servidores como responsable del balanceo de carga. En el que corresponda, cree un archivo de configuración para NGINX
-
-1. Cree un archivo de configuración NGINX (por convención, use la extensión .conf), compatible con WebSockets, a partir de la siguiente plantilla. Ajuste la configuración de 'upstream' para que use el host y el puerto de los dos servidores virtuales, y el parámero 'listen' para que escuche en el puerto 8090 (o cualquier otro, siempre que sea diferente al usado por la aplicación que está en el mismo servidor).
-
-	```nginx
-	
-	events {
-	    worker_connections 768;
-	    # multi_accept on;
-	}
-	 
-	http {
-	 
-	    log_format formatWithUpstreamLogging '[$time_local] $remote_addr - $remote_user - $server_name to: $upstream_addr: $request';
-	 
-	    access_log   access.log formatWithUpstreamLogging;
-	    error_log    error.log;
-	
-	    map $http_upgrade $connection_upgrade {
-	        default upgrade;
-	        '' close;
-	    } 
-	
-	    upstream simpleserver_backend {
-	    # default is round robin
-	        server localhost:8081;
-	        server localhost:8082;
-	    }
-	 
-	    server {
-	        listen 8000;
-	 
-	        location / {
-	            proxy_pass http://simpleserver_backend;
-		    	proxy_http_version 1.1;
-	            proxy_set_header Upgrade $http_upgrade;
-	            proxy_set_header Connection $connection_upgrade;
-	
-	        }
-	    }
-	}
-	```
-
-2. Incie el servidor NGINX con:
-
-	```bash
-	nginx -c ruta-completa-archivo-configuración
-	```
-
-3. Desde un navegador, abra la URL de la aplicación, pero usando el puerto del balanceador de carga (8090). Verifique el funcionamiento de la aplicación.
-4. Revise en la [documentación de NGINX](http://nginx.org/en/docs/http/load_balancing.html), cómo cambiar la estrategía por defecto del balanceador por la estrategia 'least_conn'.
-5. Ejecute de nuevo la aplicación, pero esta vez abriendo la aplicación desde navegadores diferentes (p.e. Chrome y Firefox), y haciendo uso de la misma.
-6. Revise, a través de los LOGs de cada servidor, si se están distribuyendo las peticiones. Revise qué instancia de la aplicación se le está asignando a cada cliente.
-7. Apague una de las dos aplicaciones (Ctrl+C), y verifique qué pasa con el cliente que estaba trabajando con el servidor recién apagado.
-
-8. Ajuste la aplicación para que la misma no tenga 'quemadas' datos como el host del servidor de mensajería o el puerto. Para esto revise [la discusión hecha en StackOverflow al respecto.](http://stackoverflow.com/questions/30528255/how-to-access-a-value-defined-in-the-application-properties-file-in-spring-boot)
-
-9. Suba en moodle la nueva versión de la aplicación.\\
-
-# Parte 3
-
-En su ejercicio, haga una rama llamada 'cloud-based-mom'. En ésta, configure su aplicación para que en lugar de usar el servidor JMeter, haga uso del servicio en RabbitMQ en la nube de [CloudAMQP](https://www.cloudamqp.com), el cual también es compatible con STOMP. Para esto:
-
-1. Regístrese en la plataforma y cree una instancia gratuita (Lemur).
-2. Abra la consola de configuración, y revise las credenciales de acceso.
-3. Abra el [siguiente ejemplo](https://github.com/hcadavid/SpringBoot_WebSockets_CloudBasedRelay_POC) y revise cómo se configuró el 'relay-broker' para usar el servicio de mensajería de CloudAMQP.
-4. Ejecute la aplicación y revise su funcionamiento. Acceda a la consola de administración de CloudAMQP y revise qué efectivamente se estén creando los tópicos correspondientes.
-5. Consulte 'benchmarks' comparativos entre RabbitMQ y ActiveMQ, y analice cual sería más conveniente.
+4. Si al ejecutarse el script LUA en REDIS se obtienen la lista de puntos, el servidor construye con los mismos el polígono, y los publica en el tópico correspondiente.
 
 
-# Parte 4 (Para el Martes en clase impreso).
+5. Una vez funcione la prueba de concepto, haga 'refactoring' para que la aplicación tenga claramente demarcadas las capas lógicas y de persistencia, y que se pueda cambiar del esquema de pesistencia en memoria al esquema de persistencia en REDIS. 
 
-1. Haga el diagrama de despliegue (incluyendo el detalle de los componentes de cada servidor) para la versión original del laboratorio.
-2. Haga el diagrama de despliegue (incluyendo el detalle de componentes) para la nueva versión del laboratrio. En este caso suponga que los servidores no están en máquinas virtuales sino en máquinas reales.
-3. Analice e indique, con la nueva arquitectura planteada qué problemas o inconsistencias se podrían presentar con la aplicación?. Qué solución plantearía al respecto?
+
+### Nota - Error de SockJS
+
+En caso de que con la configuración planteada (aplicación y REDIS corriendo en la máquina virtual) haya conflictos con SockJS pruebe configurar REDIS para aceptar conexiones desde máquinas externas, editando el archivo /home/ubuntu/redis-stable/redis.conf, cambiando "bind 127.0.0.1" por "bind 0.0.0.0", y reiniciando el servidor con: 
+
+```bash
+	redis-server /home/ubuntu/redis-stable/redis.conf
+```
+Una vez hecho esto, en la aplicación ajustar el archivo jedis.properties, poner la IP de la máquina virtual (en lugar de 127.0.0.1), y ejecutarla desde el equipo real (en lugar del virtual). ** OJO: Esto sólo se hará como prueba de concepto!, siempre se le debe configurar la seguridad a REDIS antes de permitirle el acceso remoto!. **
+
+
+
+### Parte IV - Para el Martes, Impreso. 
+
+
+Actualizar (y corregir) el diagrama realizado en el laboratorio anterior.
