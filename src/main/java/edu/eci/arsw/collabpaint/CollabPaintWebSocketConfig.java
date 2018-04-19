@@ -21,6 +21,8 @@ package edu.eci.arsw.collabpaint;
  * @author hcadavid
  */
 import java.util.logging.Logger;
+
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.messaging.simp.config.MessageBrokerRegistry;
 import org.springframework.util.AntPathMatcher;
@@ -36,7 +38,7 @@ public class CollabPaintWebSocketConfig extends AbstractWebSocketMessageBrokerCo
     private String host;
     
     @Value("${server.messaging.port}")
-    private String port;
+    private int port;
         
     @Override
     public void configureMessageBroker(MessageBrokerRegistry config) {
