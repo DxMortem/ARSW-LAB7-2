@@ -36,13 +36,14 @@ public class CollabPaintWebSocketConfig extends AbstractWebSocketMessageBrokerCo
 
     @Value("${server.messaging.address}")
     private String host;
-    
+    @Value("${userBucket.path}")
+    private String userBucketPath;
     @Value("${server.messaging.port}")
     private int port;
         
     @Override
     public void configureMessageBroker(MessageBrokerRegistry config) {
-        config.enableStompBrokerRelay("/topic/").setRelayHost(host).setRelayPort(port);
+        config.enableStompBrokerRelay("/topic/").setRelayHost(userBucketPath).setRelayPort(port);
         config.setApplicationDestinationPrefixes("/app");        
     }
 
