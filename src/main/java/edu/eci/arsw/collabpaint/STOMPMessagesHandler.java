@@ -32,24 +32,23 @@ public class STOMPMessagesHandler {
     public void handlePointEvent(Point pt,@DestinationVariable String numdibujo) throws Exception {
         Jedis jedis = JedisUtil.getPool().getResource();
         List<Object> res = new ArrayList<Object>();
-        Response<Object> luares = null;
+
         while (!res.isEmpty()){
             jedis.watch("x","y");
             Transaction t = jedis.multi();
             t.rpush("x", String.valueOf(pt.getX()));
             t.rpush("y", String.valueOf(pt.getY()));
-            luares = t.eval(luaScript.getBytes(),0,"0".getBytes());
+            Response<Object> luares = t.eval(luaScript.getBytes(),0,"0".getBytes());
             res = t.exec();
-        }
-        jedis.close();
-        msgt.convertAndSend("/topic/newpoint."+numdibujo, pt);
-        if (((ArrayList) luares.get()).size()==2){
-            List<Point> points = new ArrayList<Point>();
-            for(int i=0;i<5;i++){
-                  points.add(new Point(Integer.parseInt( new String((byte[])((ArrayList)(((ArrayList)luares.get()).get(0))).get(i))),Integer.parseInt( new String((byte[])((ArrayList)(((ArrayList)luares.get()).get(1))).get(i)))));
+            if (((ArrayList) luares.get()).size()==2){
+                List<Point> points = new ArrayList<Point>();
+                for(int i=0;i<5;i++){
+                    points.add(new Point(Integer.parseInt( new String((byte[])((ArrayList)(((ArrayList)luares.get()).get(0))).get(i))),Integer.parseInt( new String((byte[])((ArrayList)(((ArrayList)luares.get()).get(1))).get(i)))));
+                }
+                msgt.convertAndSend("/topic/newpolygon."+numdibujo, points);
             }
-            msgt.convertAndSend("/topic/newpolygon."+numdibujo, points);
         }
-
+        msgt.convertAndSend("/topic/newpoint."+numdibujo, pt);
+        jedis.close();
     }
 }
